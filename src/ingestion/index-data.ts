@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+
 import {
   Logger,
 } from '@nestjs/common';
@@ -48,17 +50,55 @@ async function bootstrap(): Promise<void> {
         ElasticsearchService,
       );
 
+    if (
+      !process.env.MOVIES_CSV_PATH
+    ) {
+      throw new Error(
+        'MOVIES_CSV_PATH environment variable is required',
+      );
+    }
+
+    if (
+      !process.env.CREDITS_CSV_PATH
+    ) {
+      throw new Error(
+        'CREDITS_CSV_PATH environment variable is required',
+      );
+    }
+
     const moviesCsvPath =
-      process.env.MOVIES_CSV_PATH ??
-      './data/tmdb_5000_movies.csv';
+      process.env.MOVIES_CSV_PATH;
 
     const creditsCsvPath =
-      process.env.CREDITS_CSV_PATH ??
-      './data/tmdb_5000_credits.csv';
+      process.env.CREDITS_CSV_PATH;
 
     logger.log(
       `Movies CSV Path: ${moviesCsvPath}`,
     );
+
+    logger.log(
+      `Credits CSV Path: ${creditsCsvPath}`,
+    );
+
+    if (
+      !fs.existsSync(
+        moviesCsvPath,
+      )
+    ) {
+      throw new Error(
+        `Movies CSV not found: ${moviesCsvPath}`,
+      );
+    }
+
+    if (
+      !fs.existsSync(
+        creditsCsvPath,
+      )
+    ) {
+      throw new Error(
+        `Credits CSV not found: ${creditsCsvPath}`,
+      );
+    }
 
     logger.log(
       'Reading Movies CSV',
@@ -71,10 +111,6 @@ async function bootstrap(): Promise<void> {
 
     logger.log(
       `Movies Loaded: ${movies.length}`,
-    );
-
-    logger.log(
-      `Credits CSV Path: ${creditsCsvPath}`,
     );
 
     logger.log(
@@ -146,8 +182,12 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     logger.error(
       'Movie Ingestion Failed',
-      error,
+      error instanceof Error
+        ? error.stack
+        : String(error),
     );
+
+    process.exit(1);
   } finally {
     await app.close();
   }

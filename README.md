@@ -1,98 +1,456 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Movie Catalog Search Application
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A NestJS + Elasticsearch application that indexes a movie dataset and exposes REST APIs demonstrating full-text search, keyword search, partial/autocomplete search, filtered search, relevance ranking, and search analytics.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Built using the [TMDB 5000 Movie Dataset](https://www.kaggle.com/datasets/tmdb/tmdb-movie-metadata) — 4,803 indexed documents.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Tech Stack
 
-## Project setup
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js 22, TypeScript |
+| Framework | NestJS 11 |
+| Search Engine | Elasticsearch 8.17 |
+| Containerisation | Docker + Docker Compose |
+| Validation | class-validator, Joi |
 
-```bash
-$ npm install
+---
+
+## Project Structure
+
+```
+src/
+├── app.module.ts                  # Root module — wires throttling, middleware, config
+├── main.ts                        # Bootstrap, graceful shutdown (SIGTERM/SIGINT)
+├── common/
+│   ├── filters/
+│   │   └── global-exception.filter.ts   # Catches all unhandled exceptions
+│   ├── interceptors/
+│   │   └── execution-time.interceptor.ts # Logs method, path, duration, requestId
+│   ├── logger/
+│   │   └── logger.service.ts            # Extended NestJS Logger
+│   └── middleware/
+│       └── correlation-id.middleware.ts # Attaches x-request-id to every request
+├── config/
+│   ├── configuration.ts
+│   └── env.validation.ts               # Joi schema — validates required env vars on boot
+├── elasticsearch/
+│   ├── elasticsearch.module.ts
+│   └── elasticsearch.service.ts        # Client wrapper with retry backoff + error handling
+├── health/
+│   ├── health.module.ts
+│   └── health.controller.ts            # GET /api/v1/health
+├── ingestion/
+│   ├── create-index.ts                 # Script: create ES index with mapping
+│   ├── index-data.ts                   # Script: read CSVs, transform, bulk index
+│   ├── bulk-index.service.ts           # Batched bulk indexing (500 docs/batch)
+│   ├── csv-reader.service.ts           # Streams CSV with file-wait retry logic
+│   └── transformer.service.ts         # Maps raw CSV rows → Movie documents
+└── movies/
+    ├── constants/index.constants.ts    # Index name constant
+    ├── controllers/
+    │   ├── search.controller.ts        # GET /api/v1/movies/search/*
+    │   └── analytics.controller.ts    # GET /api/v1/movies/analytics/*
+    ├── dto/                            # Validated + typed query parameter objects
+    ├── interfaces/
+    │   ├── movie.interface.ts
+    │   └── search-response.interface.ts
+    ├── mappings/movie.mapping.ts       # Elasticsearch index mapping definition
+    ├── queries/                        # Pure query builder functions
+    └── services/
+        ├── search.service.ts
+        ├── analytics.service.ts
+        └── search-sanitizer.service.ts
+
+docker/
+└── entrypoint.sh   # Waits for ES, creates index, optionally ingests, starts app
 ```
 
-## Compile and run the project
+---
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- Or: Node.js 22+ and a running Elasticsearch 8.x instance
+
+---
+
+## Quickstart — Docker (Recommended)
+
+This is the zero-config path. Docker Compose starts Elasticsearch and the app together.
 
 ```bash
-# development
-$ npm run start
+# 1. Clone the repo
+git clone <repo-url>
+cd movie-search-app
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+# 2. Start everything
+docker compose up --build
 ```
 
-## Run tests
+The entrypoint script will:
+1. Wait for Elasticsearch to be ready
+2. Create the `movies` index
+3. Ingest the TMDB dataset (because `AUTO_INGEST=true` is set in `docker-compose.yml`)
+4. Start the API on port 3000
+
+> First startup takes 2–4 minutes while data is ingested. Watch for `Movie Ingestion Completed Successfully` in the logs.
+
+Once running, verify:
+```
+GET http://localhost:3000/api/v1/health
+```
+
+---
+
+## Local Development (without Docker)
+
+### 1. Start Elasticsearch Locally
+
+Option A — Docker (ES only):
+```bash
+docker run -d \
+  --name elasticsearch \
+  -p 9200:9200 \
+  -e discovery.type=single-node \
+  -e xpack.security.enabled=false \
+  docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+```
+
+Option B — Use your existing local Elasticsearch with security enabled.
+
+### 2. Configure Environment
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+cp .env.example .env
 ```
 
-## Deployment
+Edit `.env` for your setup:
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+```env
+# No-auth local Elasticsearch (Docker):
+NODE_ENV=development
+ELASTICSEARCH_NODE=http://localhost:9200
+ELASTICSEARCH_SECURITY_ENABLED=false
+ELASTICSEARCH_USERNAME=
+ELASTICSEARCH_PASSWORD=
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+# Secured local Elasticsearch:
+NODE_ENV=development
+ELASTICSEARCH_NODE=https://localhost:9200
+ELASTICSEARCH_SECURITY_ENABLED=true
+ELASTICSEARCH_USERNAME=elastic
+ELASTICSEARCH_PASSWORD=your-password
+```
+
+### 3. Install, Index, and Run
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm install
+
+# Create the Elasticsearch index
+npm run create-index
+
+# Ingest the movie dataset (~4,800 docs)
+npm run index-data
+
+# Start the API
+npm run start:dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+---
 
-## Resources
+## Environment Variables
 
-Check out a few resources that may come in handy when working with NestJS:
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `3000` | HTTP port |
+| `NODE_ENV` | No | `development` | Environment (`development`, `production`, `test`) |
+| `ELASTICSEARCH_NODE` | **Yes** | — | Elasticsearch URL |
+| `ELASTICSEARCH_SECURITY_ENABLED` | No | `false` | Set `true` to enable auth |
+| `ELASTICSEARCH_USERNAME` | No | — | ES username (when security enabled) |
+| `ELASTICSEARCH_PASSWORD` | No | — | ES password (when security enabled) |
+| `AUTO_INGEST` | No | `false` | Auto-run ingestion on container start |
+| `MOVIES_CSV_PATH` | No | `./data/tmdb_5000_movies.csv` | Path to movies CSV |
+| `CREDITS_CSV_PATH` | No | `./data/tmdb_5000_credits.csv` | Path to credits CSV |
+| `INGESTION_RETRIES` | No | `5` | File-read retry attempts |
+| `INGESTION_RETRY_DELAY_MS` | No | `3000` | Delay between retries (ms) |
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+---
 
-## Support
+## API Reference
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+All endpoints are prefixed with `/api/v1`.  
+Rate limit: **30 requests per minute** per IP.  
+Every response includes an `x-request-id` header for tracing.
 
-## Stay in touch
+---
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### Health
 
-## License
+#### `GET /api/v1/health`
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+```json
+{
+  "status": "ok",
+  "elasticsearch": true,
+  "movieCount": 4803
+}
+```
+
+---
+
+### Search Endpoints
+
+All search endpoints support pagination:
+
+| Parameter | Default | Constraints |
+|---|---|---|
+| `page` | `1` | min: 1 |
+| `size` | `10` | min: 1, max: 50 |
+
+Pagination is capped at 10,000 documents (`from + size ≤ 10000`).
+
+---
+
+#### `GET /api/v1/movies/search/full-text`
+
+Searches `title` (boosted ×5) and `description` using `multi_match`. Also applies exact-title and phrase boosts.
+
+| Param | Required | Description |
+|---|---|---|
+| `query` | Yes | Search text (2–100 chars) |
+
+```
+GET /api/v1/movies/search/full-text?query=dark+knight
+```
+
+```json
+{
+  "page": 1,
+  "size": 10,
+  "total": 3,
+  "totalPages": 1,
+  "executionTimeMs": 12,
+  "results": [
+    { "score": 38.4, "title": "The Dark Knight", "releaseYear": 2008, ... }
+  ]
+}
+```
+
+---
+
+#### `GET /api/v1/movies/search/keyword`
+
+Exact-match search on a specific field (no tokenisation).
+
+| Param | Required | Allowed values |
+|---|---|---|
+| `field` | Yes | `director`, `genre`, `language` |
+| `value` | Yes | Exact value to match |
+
+```
+GET /api/v1/movies/search/keyword?field=director&value=Christopher+Nolan
+```
+
+---
+
+#### `GET /api/v1/movies/search/partial`
+
+Prefix/partial search using edge n-grams (`title.autocomplete`). Best for UI typeahead.
+
+| Param | Required | Description |
+|---|---|---|
+| `query` | Yes | Partial input (2–100 chars) |
+
+```
+GET /api/v1/movies/search/partial?query=inter
+```
+
+---
+
+#### `GET /api/v1/movies/search/autocomplete`
+
+`search_as_you_type` field query. Returns instant prefix matches as the user types.
+
+| Param | Required | Description |
+|---|---|---|
+| `query` | Yes | Partial input (2–100 chars) |
+
+```
+GET /api/v1/movies/search/autocomplete?query=bat
+```
+
+---
+
+#### `GET /api/v1/movies/search/fuzzy`
+
+Typo-tolerant search using Elasticsearch fuzzy matching. Handles spelling mistakes.
+
+| Param | Required | Description |
+|---|---|---|
+| `query` | Yes | Search text with possible typos (2–100 chars) |
+
+```
+GET /api/v1/movies/search/fuzzy?query=intersteller
+```
+
+---
+
+#### `GET /api/v1/movies/search/filter`
+
+Filter movies by field values. No relevance scoring — uses ES `filter` context (cacheable).
+
+| Param | Required | Description |
+|---|---|---|
+| `genre` | No | Exact genre match e.g. `Action` |
+| `language` | No | Exact language code e.g. `en` |
+| `year` | No | Minimum release year (1900–2100) |
+
+```
+GET /api/v1/movies/search/filter?genre=Action&language=en&year=2010
+```
+
+---
+
+#### `GET /api/v1/movies/search/combined`
+
+Full-text query + filter clauses together.
+
+| Param | Required | Description |
+|---|---|---|
+| `query` | Yes | Search text (2–100 chars) |
+| `genre` | No | Filter by genre |
+| `year` | No | Minimum release year |
+
+```
+GET /api/v1/movies/search/combined?query=action+hero&genre=Action&year=2010
+```
+
+---
+
+#### `GET /api/v1/movies/search/ranking`
+
+Relevance-tuned search using `function_score`. Boosts results by rating, popularity, or recency.
+
+| Param | Required | Allowed values |
+|---|---|---|
+| `query` | Yes | Search text (2–100 chars) |
+| `mode` | Yes | `rating`, `popularity`, `recency`, `all` |
+
+```
+GET /api/v1/movies/search/ranking?query=space&mode=rating
+```
+
+**Modes:**
+- `rating` — boosts highly rated movies (`field_value_factor` on `rating`)
+- `popularity` — boosts by TMDB popularity score
+- `recency` — boosts newer movies (Gaussian decay from 2026)
+- `all` — applies all three boosts together
+
+---
+
+### Analytics Endpoints
+
+#### `GET /api/v1/movies/analytics/genres`
+
+Top genres by document count (`terms` aggregation, top 20).
+
+#### `GET /api/v1/movies/analytics/languages`
+
+Language distribution across the dataset.
+
+#### `GET /api/v1/movies/analytics/directors`
+
+Top directors by number of movies.
+
+#### `GET /api/v1/movies/analytics/release-years`
+
+Movie count per release year (`histogram` aggregation, interval 1).
+
+---
+
+## Elasticsearch Mapping Summary
+
+| Field | Type | Reason |
+|---|---|---|
+| `id` | `keyword` | Exact ID lookups, no tokenisation needed |
+| `title` | `text` + `.keyword` + `.autocomplete` | Full-text search, exact match, and `search_as_you_type` for autocomplete |
+| `description` | `text` | Full-text search only |
+| `genre` | `keyword` | Filtering and aggregations — not tokenised |
+| `cast` | `text` + `.keyword` | Actor name search and exact match |
+| `director` | `text` + `.keyword` | Name search and exact keyword filter |
+| `language` | `keyword` | Filter by language code |
+| `releaseYear` | `integer` | Range filters and histogram aggregation |
+| `rating` | `float` | Sorting and `field_value_factor` boosting |
+| `popularity` | `float` | `field_value_factor` boosting |
+| `voteCount` | `integer` | Informational |
+
+---
+
+## Running Tests
+
+```bash
+# e2e tests (requires a running Elasticsearch)
+npm run test:e2e
+```
+
+> Tests spin up the full NestJS application and make real HTTP requests. Ensure Elasticsearch is running and the index is populated before running tests.
+
+---
+
+## Docker Details
+
+### Compose Services
+
+| Service | Port | Notes |
+|---|---|---|
+| `elasticsearch` | 9200 | Single-node, security disabled |
+| `movie-search-app` | 3000 | Waits for ES health before starting |
+
+### Entrypoint Flow
+
+```
+Container starts
+  → Wait for Elasticsearch (HTTP polling)
+  → node dist/ingestion/create-index.js
+  → if AUTO_INGEST=true: node dist/ingestion/index-data.js
+  → exec node dist/main.js
+```
+
+### Rebuild After Code Changes
+
+```bash
+docker compose up --build
+```
+
+### Stop and Remove Data
+
+```bash
+docker compose down -v   # -v removes the ES data volume
+```
+
+---
+
+## Ingestion Scripts (Manual)
+
+If `AUTO_INGEST` is disabled or you want to re-index:
+
+```bash
+# Create index (idempotent — skips if already exists)
+npm run create-index
+
+# Ingest data
+npm run index-data
+```
+
+Re-indexing from scratch:
+
+```bash
+# Delete the index via Elasticsearch API, then re-create
+curl -X DELETE http://localhost:9200/movies
+npm run create-index
+npm run index-data
+```

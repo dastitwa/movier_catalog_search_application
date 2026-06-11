@@ -11,6 +11,8 @@ import { AnalyticsService } from './services/analytics.service';
 
 import { SearchSanitizerService } from './services/search-sanitizer.service';
 
+import { BulkIndexService } from '../ingestion/bulk-index.service';
+
 @Module({
   imports: [
     ElasticsearchModule,
@@ -25,7 +27,11 @@ import { SearchSanitizerService } from './services/search-sanitizer.service';
     SearchService,
     AnalyticsService,
     SearchSanitizerService,
+    BulkIndexService,
+  ],
+
+  exports: [
+    BulkIndexService,
   ],
 })
-
 export class MoviesModule {}
